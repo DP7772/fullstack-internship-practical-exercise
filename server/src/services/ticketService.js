@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { config } from '../config.js';
 
 const PAGE_SIZE = 20;
 
@@ -8,7 +9,16 @@ const PAGE_SIZE = 20;
  * Supports free-text search on subject, filtering by status and priority,
  * and sorting by any column the UI exposes in its dropdown.
  */
-export async function listTickets({ orgId, page = 1, search = '', status, priority, sortBy = 'created_at', order = 'desc' }) {
+export async function listTickets({
+  orgId,
+  page = 1,
+  search = '',
+  status,
+  priority,
+  sortBy = 'created_at',
+  order = 'desc',
+  breached
+}) {
   const where = ['t.org_id = ?'];
   const params = [orgId];
 
@@ -16,17 +26,18 @@ export async function listTickets({ orgId, page = 1, search = '', status, priori
     where.push('t.subject LIKE ?');
     params.push(`%${search}%`);
   }
+
   if (status) {
     where.push('t.status = ?');
     params.push(status);
   }
+
   if (priority) {
     where.push('t.priority = ?');
     params.push(priority);
   }
 
   const whereSql = where.join(' AND ');
-  const offset = page * PAGE_SIZE;
 
   const rows = await query(
     `SELECT t.id, t.subject, t.status, t.priority, t.created_at, t.updated_at,
@@ -35,23 +46,41 @@ export async function listTickets({ orgId, page = 1, search = '', status, priori
        LEFT JOIN users u ON u.id = t.assignee_id
        JOIN users r ON r.id = t.requester_id
       WHERE ${whereSql}
-      ORDER BY t.${sortBy} ${order}
-      LIMIT ? OFFSET ?`,
-    [...params, PAGE_SIZE, offset]
-  );
-
-  // Attach the comment count each row needs for the list badge.
-  for (const row of rows) {
-    const [{ c }] = await query('SELECT COUNT(*) AS c FROM comments WHERE ticket_id = ?', [row.id]);
-    row.comment_count = c;
-  }
-
-  const [{ total }] = await query(
-    `SELECT COUNT(*) AS total FROM tickets t WHERE ${whereSql}`,
+      ORDER BY t.${sortBy} ${order}`,
     params
   );
 
-  return { rows, total, page, pageSize: PAGE_SIZE };
+  for (const row of rows) {
+    const [{ c }] = await query(
+      'SELECT COUNT(*) AS c FROM comments WHERE ticket_id = ?',
+      [row.id]
+    );
+
+    row.comment_count = c;
+
+    await addSlaState(row);
+  }
+
+  const filteredRows =
+    breached === 'true'
+      ? rows.filter((row) => row.breached)
+      : rows;
+
+  const total = filteredRows.length;
+
+  const offset = (page - 1) * PAGE_SIZE;
+
+  const paginatedRows = filteredRows.slice(
+    offset,
+    offset + PAGE_SIZE
+  );
+
+  return {
+    rows: paginatedRows,
+    total,
+    page,
+    pageSize: PAGE_SIZE
+  };
 }
 
 export async function getTicketById(id, orgId) {
@@ -63,7 +92,12 @@ export async function getTicketById(id, orgId) {
       WHERE t.id = ? AND t.org_id = ?`,
     [id, orgId]
   );
-  return rows[0] || null;
+
+  if (!rows[0]) return null;
+
+  await addSlaState(rows[0]);
+
+  return rows[0];
 }
 
 export async function listComments(ticketId) {
@@ -83,7 +117,7 @@ export async function createTicket({ orgId, subject, body, priority, requesterId
      VALUES (?, ?, ?, ?, ?)`,
     [orgId, subject, body, priority, requesterId]
   );
-  return getTicketById(result.insertId);
+ return getTicketById(result.insertId, orgId);
 }
 
 export async function assignTicket(ticketId, assigneeId, orgId) {
@@ -113,4 +147,46 @@ export async function assignTicket(ticketId, assigneeId, orgId) {
 
 export async function deleteTicket(id) {
   await query('DELETE FROM tickets WHERE id = ?', [id]);
+}
+
+
+function calculateSlaDeadline(createdAt, priority) {
+  const hours = config.slaTargets[priority] ?? config.slaTargets.P3;
+
+  return new Date(
+    new Date(createdAt).getTime() + hours * 60 * 60 * 1000
+  );
+}
+
+async function getFirstStaffResponse(ticketId) {
+  const rows = await query(
+    `SELECT c.created_at
+       FROM comments c
+       JOIN users u ON u.id = c.author_id
+      WHERE c.ticket_id = ?
+        AND u.role IN ('agent', 'admin')
+      ORDER BY c.created_at ASC
+      LIMIT 1`,
+    [ticketId]
+  );
+
+  return rows[0]?.created_at || null;
+}
+
+async function addSlaState(ticket) {
+  const slaDeadline = calculateSlaDeadline(
+    ticket.created_at,
+    ticket.priority
+  );
+
+  const firstStaffResponse = await getFirstStaffResponse(ticket.id);
+
+  const comparisonTime = firstStaffResponse
+    ? new Date(firstStaffResponse)
+    : new Date();
+
+  ticket.sla_deadline = slaDeadline;
+  ticket.breached = comparisonTime >= slaDeadline;
+
+  return ticket;
 }

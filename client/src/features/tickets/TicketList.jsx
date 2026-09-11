@@ -6,6 +6,7 @@ import { api } from '../../app/api';
 const STATUSES = ['', 'open', 'pending', 'resolved', 'closed'];
 const PRIORITIES = ['', 'P1', 'P2', 'P3'];
 
+
 export default function TicketList() {
   const user = useSelector((s) => s.auth.user);
 
@@ -16,11 +17,20 @@ export default function TicketList() {
   const [status, setStatus] = useState('');
   const [priority, setPriority] = useState('');
   const [sortBy, setSortBy] = useState('created_at');
+  const [breached, setBreached] = useState('');
   const [loading, setLoading] = useState(false);
+
 
   useEffect(() => {
     setLoading(true);
-    const params = new URLSearchParams({ page, search, status, priority, sortBy, order: 'desc' });
+    const params = new URLSearchParams({  page,
+  search,
+  status,
+  priority,
+  sortBy,
+  order: 'desc',
+  breached,
+ });
     api(`/tickets?${params.toString()}`)
       .then((data) => {
         setRows(data.rows);
@@ -28,7 +38,7 @@ export default function TicketList() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [page]);
+  }, [page, breached]);
 
   async function handleDelete(id) {
     await api(`/tickets/${id}`, { method: 'DELETE' });
@@ -63,6 +73,13 @@ export default function TicketList() {
           <option value="priority">Priority</option>
           <option value="status">Status</option>
         </select>
+        <select
+  value={breached}
+  onChange={(e) => setBreached(e.target.value)}
+>
+  <option value="">Any SLA</option>
+  <option value="true">Breached only</option>
+</select>
       </div>
 
       {loading && <p>Loading…</p>}
@@ -70,8 +87,15 @@ export default function TicketList() {
       <table>
         <thead>
           <tr>
-            <th>#</th><th>Subject</th><th>Status</th><th>Priority</th>
-            <th>Assignee</th><th>Comments</th><th>Created</th><th />
+            <th>#</th>
+<th>Subject</th>
+<th>Status</th>
+<th>Priority</th>
+<th>SLA</th>
+<th>Assignee</th>
+<th>Comments</th>
+<th>Created</th>
+<th />
           </tr>
         </thead>
         <tbody>
@@ -79,9 +103,18 @@ export default function TicketList() {
             <tr key={i}>
               <td>{t.id}</td>
               <td><Link to={`/tickets/${t.id}`}>{t.subject}</Link></td>
-              <td>{t.status}</td>
-              <td>{t.priority}</td>
-              <td>{t.assignee_name || '—'}</td>
+             <td>{t.status}</td>
+<td>{t.priority}</td>
+
+<td>
+  {t.breached ? (
+    <span className="sla-badge breached">SLA Breached</span>
+  ) : (
+    <span className="sla-badge">Within SLA</span>
+  )}
+</td>
+
+<td>{t.assignee_name || '—'}</td>
               <td>{t.comment_count}</td>
               <td>{new Date(t.created_at).toLocaleString()}</td>
               <td>

@@ -51,6 +51,17 @@ export default function TicketDetail() {
         #{ticket.id} · {ticket.status} · {ticket.priority} ·
         requested by {ticket.requester_name} ({ticket.requester_email})
       </p>
+      <div>
+  {ticket.breached ? (
+    <span className="sla-badge breached">SLA Breached</span>
+  ) : (
+    <span className="sla-badge">Within SLA</span>
+  )}
+
+  <span>
+    {' '}Deadline: {new Date(ticket.sla_deadline).toLocaleString()}
+  </span>
+</div>
       <p className="body">{ticket.body}</p>
 
       {!ticket.assignee_id && <button onClick={claim}>Claim this ticket</button>}
@@ -64,7 +75,7 @@ export default function TicketDetail() {
             <span className="when">{new Date(c.created_at).toLocaleString()}</span>
             <div>{c.body}</div>
           </li>
-        ))}
+        ))} 
       </ul>
 
       <form onSubmit={addComment}>
